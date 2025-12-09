@@ -147,7 +147,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Run experiments
-    results, watermark_info = run_lr_sweep_experiment(
+    results, watermark_info, initial_weight = run_lr_sweep_experiment(
         optimizer_types=args.optimizers,
         lr_range=(args.lr_min, args.lr_max),
         num_lrs=args.num_lrs,
@@ -180,7 +180,8 @@ def main():
                 results,
                 save_path=str(output_dir / "lr_sweep_results.png"),
                 show=False,
-                watermark_info=watermark_info,  # 传递水印信息，只显示水印区域
+                watermark_info=watermark_info,
+                initial_weight=initial_weight,  # 用于固定颜色范围
             )
             print(f"\nMain figure saved to: {output_dir / 'lr_sweep_results.png'}")
         except Exception as e:

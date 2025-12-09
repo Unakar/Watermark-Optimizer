@@ -5,6 +5,7 @@ from .visualization import (
     plot_lr_sweep_results,
     visualize_watermark_region,
     visualize_watermark_comparison,
+    compute_stable_rank,
 )
 from .mup import (
     get_mup_lr_scale_factor,
@@ -24,6 +25,7 @@ __all__ = [
     "plot_lr_sweep_results",
     "visualize_watermark_region",
     "visualize_watermark_comparison",
+    "compute_stable_rank",
     # μP utilities
     "get_mup_lr_scale_factor",
     "spectral_mup_init",

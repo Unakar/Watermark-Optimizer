@@ -8,6 +8,38 @@ from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
 
+def compute_stable_rank(M: torch.Tensor) -> float:
+    """Compute stable rank of a matrix.
+    
+    Stable rank = ||M||_F² / ||M||_*²
+    
+    This quantity characterizes how "spread out" the singular values are.
+    - Low stable rank (~1): dominated by top singular value, rank-1-like
+    - High stable rank (~min(m,n)): all singular values similar, "full rank"
+    
+    Args:
+        M: Input matrix
+        
+    Returns:
+        Stable rank value
+    """
+    if isinstance(M, np.ndarray):
+        M = torch.from_numpy(M)
+    
+    M = M.to(torch.float32)
+    
+    fro_norm_sq = torch.sum(M ** 2).item()
+    
+    # Spectral norm = largest singular value
+    _, S, _ = torch.linalg.svd(M, full_matrices=False)
+    spec_norm_sq = (S[0] ** 2).item()
+    
+    if spec_norm_sq < 1e-10:
+        return 0.0
+    
+    return fro_norm_sq / spec_norm_sq
+
+
 def visualize_watermark_region(
     weight: torch.Tensor,
     watermark_info: dict,
@@ -289,19 +321,27 @@ def plot_lr_sweep_results(
     results: Dict[str, Dict[float, Dict]],
     save_path: Optional[str] = None,
     show: bool = True,
-    figsize: Tuple[int, int] = (20, 12),  # 更大的图
-    watermark_info: Optional[dict] = None,  # 水印信息，用于裁剪
+    figsize: Tuple[int, int] = (14, 8),
+    watermark_info: Optional[dict] = None,
+    initial_weight: Optional[np.ndarray] = None,  # 用于计算固定的颜色范围
 ):
-    """Plot learning rate sweep results with weight matrix thumbnails.
+    """Plot learning rate sweep results with weight matrix insets.
+    
+    使用与原始 notebook 相同的清晰可视化方式：
+    - 使用 fig.add_axes 创建 inset（不缩放，保留完整细节）
+    - 使用固定的颜色范围（基于初始权重）
+    - 使用 RdBu colormap
     
     Args:
         results: Dict with structure {optimizer_name: {lr: {'accuracy': float, 'weight_image': np.ndarray}}}
         save_path: Path to save the figure
         show: Whether to display the plot
         figsize: Figure size
-        watermark_info: 水印信息，如果提供则只显示水印区域
+        watermark_info: 水印信息
+        initial_weight: 初始权重，用于计算固定的颜色范围
     """
-    fig, ax = plt.subplots(figsize=figsize)
+    fig = plt.figure(figsize=figsize)
+    main_ax = plt.gca()
     
     colors = {
         'adamw': '#FF6B35',          # Orange
@@ -316,6 +356,18 @@ def plot_lr_sweep_results(
         'muon': 'Orthogonalization only (Muon)',
     }
     
+    # 计算固定的颜色范围（像原始 notebook 一样）
+    # 使用初始权重范围的 1/4，这样对比更强
+    if initial_weight is not None:
+        if isinstance(initial_weight, torch.Tensor):
+            initial_weight = initial_weight.detach().cpu().numpy()
+        vmin = initial_weight.min() / 4
+        vmax = initial_weight.max() / 4
+    else:
+        # 默认值
+        vmin, vmax = -0.1, 0.1
+    
+    # 绘制准确率曲线
     for optimizer_name, lr_results in results.items():
         lrs = sorted(lr_results.keys())
         accuracies = [lr_results[lr]['accuracy'] for lr in lrs]
@@ -323,46 +375,63 @@ def plot_lr_sweep_results(
         color = colors.get(optimizer_name, 'gray')
         label = labels.get(optimizer_name, optimizer_name)
         
-        # Plot the accuracy curve
-        ax.plot(lrs, accuracies, 'o-', color=color, label=label, linewidth=2, markersize=8)
+        main_ax.plot(lrs, accuracies, 'o-', color=color, label=label, linewidth=2, markersize=6)
+    
+    main_ax.set_xscale('log')
+    main_ax.set_ylim(0.0, 1.1)
+    main_ax.set_xlabel('Learning Rate', fontsize=14)
+    main_ax.set_ylabel('Training Accuracy', fontsize=14)
+    main_ax.set_title('Effect of Dualization on Accuracy and Weight Erasure', fontsize=16)
+    main_ax.legend(loc='lower left', frameon=False, fontsize=11)
+    main_ax.grid(True, alpha=0.3)
+    
+    # 添加权重矩阵 inset（使用 fig.add_axes，清晰无缩放）
+    inset_size = 0.08  # inset 大小（相对于图）
+    
+    for optimizer_name, lr_results in results.items():
+        lrs = sorted(lr_results.keys())
+        accuracies = [lr_results[lr]['accuracy'] for lr in lrs]
+        color = colors.get(optimizer_name, 'gray')
         
-        # Add weight matrix thumbnails (只显示水印区域，水印为黑色)
         for i, lr in enumerate(lrs):
-            if 'weight_image' in lr_results[lr] and lr_results[lr]['weight_image'] is not None:
-                weight_img = lr_results[lr]['weight_image']
+            if 'weight_image' not in lr_results[lr] or lr_results[lr]['weight_image'] is None:
+                continue
                 
-                # 创建缩略图：只裁剪水印区域，水印显示为黑色
-                thumbnail = create_weight_thumbnail(
-                    torch.from_numpy(weight_img) if isinstance(weight_img, np.ndarray) else weight_img,
-                    size=(120, 120),  # 正方形，更大
-                    watermark_info=watermark_info,  # 只裁剪水印区域
-                    highlight_watermark=True,  # 水印显示为黑色
-                )
-                
-                # Calculate offset for thumbnail placement (spread out based on optimizer index)
-                opt_idx = list(results.keys()).index(optimizer_name)
-                y_offset = 0.18 * (opt_idx - len(results) / 2 + 0.5)
-                
-                # For RGB thumbnail, don't use cmap
-                imagebox = OffsetImage(thumbnail, zoom=0.8)  # 更大的 zoom
-                ab = AnnotationBbox(
-                    imagebox,
-                    (lr, accuracies[i] + y_offset),
-                    frameon=True,
-                    pad=0.15,
-                    bboxprops=dict(edgecolor=color, linewidth=2)
-                )
-                ax.add_artist(ab)
-    
-    ax.set_xscale('log')
-    ax.set_xlabel('Learning Rate', fontsize=14)
-    ax.set_ylabel('Training Accuracy', fontsize=14)
-    ax.set_title('Learning Rate Sweep: Watermark Erasure Experiment\n(Thumbnails show 512×512 watermark region only - digit "8" shown in BLACK)', fontsize=14)
-    ax.legend(loc='upper left', fontsize=11)
-    ax.grid(True, alpha=0.3)
-    ax.set_ylim(-0.25, 1.35)  # More room for larger thumbnails
-    
-    plt.tight_layout()
+            weight_img = lr_results[lr]['weight_image']
+            if isinstance(weight_img, torch.Tensor):
+                weight_img = weight_img.detach().cpu().numpy()
+            
+            # 裁剪到水印区域
+            if watermark_info is not None:
+                r_start, c_start = watermark_info['position']
+                r_end, c_end = watermark_info['region_end']
+                weight_img = weight_img[r_start:r_end, c_start:c_end]
+            
+            # 计算 inset 位置（数据坐标 → 图坐标）
+            lr_disp, acc_disp = main_ax.transData.transform((lr, accuracies[i]))
+            lr_fig, acc_fig = fig.transFigure.inverted().transform((lr_disp, acc_disp))
+            
+            # 根据优化器索引添加垂直偏移
+            opt_idx = list(results.keys()).index(optimizer_name)
+            y_offset = 0.12 * (opt_idx - len(results) / 2 + 0.5)
+            
+            # 创建 inset axes（清晰，无缩放！）
+            inset = fig.add_axes([
+                lr_fig - inset_size / 2,
+                acc_fig + y_offset - inset_size / 2,
+                inset_size,
+                inset_size
+            ])
+            
+            # 使用固定颜色范围和 RdBu colormap
+            inset.imshow(weight_img, cmap='RdBu', vmin=vmin, vmax=vmax, aspect='equal')
+            inset.axis('off')
+            
+            # 添加彩色边框
+            for spine in inset.spines.values():
+                spine.set_edgecolor(color)
+                spine.set_linewidth(2)
+                spine.set_visible(True)
     
     if save_path:
         plt.savefig(save_path, dpi=200, bbox_inches='tight')
