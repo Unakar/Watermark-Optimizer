@@ -69,8 +69,8 @@ def parse_args():
     parser.add_argument(
         "--optimizers", type=str, nargs="+",
         default=["adamw", "spectral_ball"],
-        choices=["adamw", "spectral_ball"],
-        help="Optimizers to compare"
+        choices=["adamw", "spectral_ball", "muon_ball"],
+        help="Optimizers to compare (muon_ball = SpectralBall with λ=0)"
     )
     
     # μP (Maximal Update Parameterization) settings

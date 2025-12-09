@@ -144,6 +144,35 @@ def test_spectral_ball_optimizer():
     return True
 
 
+def test_muon_ball_optimizer():
+    """Test MuonBall optimizer (SpectralBall with λ=0)."""
+    print("Testing MuonBall optimizer...", end=" ")
+    
+    from optimizers import MuonBall
+    from models import SimpleMLP
+    
+    model = SimpleMLP()
+    optimizer = MuonBall(
+        model.parameters(),
+        lr=1e-3,
+        momentum_beta=0.9,
+        weight_decay=0.01,
+    )
+    
+    # Test a few optimization steps
+    for _ in range(3):
+        x = torch.randn(4, 3072)
+        y = model(x)
+        loss = y.sum()
+        
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+    
+    print("✓")
+    return True
+
+
 def test_data_loader():
     """Test CIFAR-10 data loader."""
     print("Testing data loader...", end=" ")
@@ -206,6 +235,7 @@ def run_all_tests():
         test_mup_init,
         test_watermark,
         test_spectral_ball_optimizer,
+        test_muon_ball_optimizer,
         test_data_loader,
         test_visualization,
     ]

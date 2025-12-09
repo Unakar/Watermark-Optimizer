@@ -104,12 +104,14 @@ def plot_lr_sweep_results(
     fig, ax = plt.subplots(figsize=figsize)
     
     colors = {
-        'adamw': '#FF6B35',       # Orange
+        'adamw': '#FF6B35',          # Orange
         'spectral_ball': '#004E89',  # Blue
+        'muon_ball': '#2E8B57',      # Sea Green
     }
     labels = {
         'adamw': 'Without dualization (AdamW)',
         'spectral_ball': 'With dualization (SpectralBall)',
+        'muon_ball': 'With dualization λ=0 (MuonBall)',
     }
     
     for optimizer_name, lr_results in results.items():

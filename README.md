@@ -1,2 +1,0 @@
-# Watermark-Optimizer
-crazy exp
