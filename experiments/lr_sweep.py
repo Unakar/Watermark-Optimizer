@@ -11,7 +11,7 @@ from pathlib import Path
 import copy
 
 from models import SimpleMLP
-from optimizers import SpectralBall, MuonBall
+from optimizers import SpectralBall, MuonBall, Muon
 from utils.watermark import create_watermark_setup, apply_watermark, compute_watermark_visibility
 from utils.data import get_cifar10_dataloader
 from utils.visualization import visualize_weight_matrix
@@ -123,6 +123,24 @@ def create_optimizer(
                 power_iteration_steps=10,
                 msign_steps=5,
                 radius_mode="spectral_mup",
+                scale_mode="align_adamw_rms",
+            )
+    elif optimizer_type == "muon":
+        # Muon: Only orthogonalization, no spectral constraint
+        if use_mup_lr:
+            return Muon(
+                param_groups,
+                momentum_beta=momentum,
+                msign_steps=5,
+                scale_mode="spectral_mup",
+            )
+        else:
+            return Muon(
+                param_groups,
+                lr=lr,
+                momentum_beta=momentum,
+                weight_decay=weight_decay,
+                msign_steps=5,
                 scale_mode="align_adamw_rms",
             )
     else:

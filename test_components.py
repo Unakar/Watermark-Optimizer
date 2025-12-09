@@ -173,6 +173,35 @@ def test_muon_ball_optimizer():
     return True
 
 
+def test_muon_optimizer():
+    """Test Muon optimizer (orthogonalization only, no retraction)."""
+    print("Testing Muon optimizer...", end=" ")
+    
+    from optimizers import Muon
+    from models import SimpleMLP
+    
+    model = SimpleMLP()
+    optimizer = Muon(
+        model.parameters(),
+        lr=1e-3,
+        momentum_beta=0.95,
+        weight_decay=0.01,
+    )
+    
+    # Test a few optimization steps
+    for _ in range(3):
+        x = torch.randn(4, 3072)
+        y = model(x)
+        loss = y.sum()
+        
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+    
+    print("✓")
+    return True
+
+
 def test_data_loader():
     """Test CIFAR-10 data loader."""
     print("Testing data loader...", end=" ")
@@ -236,6 +265,7 @@ def run_all_tests():
         test_watermark,
         test_spectral_ball_optimizer,
         test_muon_ball_optimizer,
+        test_muon_optimizer,
         test_data_loader,
         test_visualization,
     ]

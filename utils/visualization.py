@@ -107,11 +107,13 @@ def plot_lr_sweep_results(
         'adamw': '#FF6B35',          # Orange
         'spectral_ball': '#004E89',  # Blue
         'muon_ball': '#2E8B57',      # Sea Green
+        'muon': '#8B008B',           # Dark Magenta
     }
     labels = {
         'adamw': 'Without dualization (AdamW)',
         'spectral_ball': 'With dualization (SpectralBall)',
         'muon_ball': 'With dualization λ=0 (MuonBall)',
+        'muon': 'Orthogonalization only (Muon)',
     }
     
     for optimizer_name, lr_results in results.items():
