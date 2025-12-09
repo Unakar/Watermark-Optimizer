@@ -12,9 +12,9 @@ import copy
 
 from models import SimpleMLP
 from optimizers import SpectralBall, MuonBall, Muon
-from utils.watermark import create_watermark_setup, apply_watermark, compute_watermark_visibility
+from utils.watermark import create_watermark_setup, apply_watermark, compute_watermark_visibility, get_watermark_region
 from utils.data import get_cifar10_dataloader
-from utils.visualization import visualize_weight_matrix
+from utils.visualization import visualize_weight_matrix, visualize_watermark_region, visualize_watermark_comparison
 
 
 def get_mup_lr_scale(d_out: int, d_in: int, mode: str = "spectral_mup") -> float:
@@ -259,20 +259,25 @@ def run_single_experiment(
     torch.manual_seed(seed)
     np.random.seed(seed)
     
-    # Create model with appropriate initialization
+    # Create 3-layer MLP model
     model = SimpleMLP(
         input_dim=3072,
-        hidden_dim=1024,
-        output_dim=10,
+        hidden_dim=1024,      # fc1: 3072 → 1024
+        hidden_dim2=1024,     # fc2: 1024 → 1024 ← 水印层！
+        output_dim=10,        # fc3: 1024 → 10
         activation="relu",
         init_mode="spectral_mup" if use_mup_init else "xavier",
         init_sigma=init_sigma,
     )
     
-    # Apply watermark
-    initial_weight = model.get_hidden_weight().clone()
+    # Apply watermark to fc2 (layer 2)
+    # 水印植入逻辑：
+    # 1. 获取 fc2 权重 (shape: 1024 × 1024)
+    # 2. 在权重矩阵上，把数字 "8" 形状的区域 (256×256) 设为 0
+    # 3. 训练后观察这些 0 值是否被填充 → 判断权重是否远离初始化
+    initial_weight = model.get_hidden_weight(layer_idx=2).clone()
     apply_watermark(initial_weight, watermark_mask, watermark_value)
-    model.set_hidden_weight(initial_weight)
+    model.set_hidden_weight(initial_weight, layer_idx=2)
     
     # Store initial weight for comparison
     initial_weight_copy = initial_weight.clone()
@@ -304,8 +309,8 @@ def run_single_experiment(
         device=device,
     )
     
-    # Get final weight
-    final_weight = model.get_hidden_weight().cpu()
+    # Get final weight from fc2 (watermark layer)
+    final_weight = model.get_hidden_weight(layer_idx=2).cpu()
     
     # Compute watermark visibility
     visibility = compute_watermark_visibility(
@@ -360,13 +365,21 @@ def run_lr_sweep_experiment(
     # Generate learning rates (log scale)
     lrs = np.logspace(np.log10(lr_range[0]), np.log10(lr_range[1]), num_lrs)
     
-    # Create watermark
-    watermark_mask, watermark_value = create_watermark_setup(
-        weight_shape=(1024, 3072),
-        letter="a",
+    # Create watermark for fc2 (layer 2)
+    # fc2 shape: (1024, 1024), 水印大小 256×256，数字 "8"
+    watermark_mask, watermark_value, watermark_info = create_watermark_setup(
+        weight_shape=(1024, 1024),  # fc2 的 shape
+        letter="8",                  # 数字 8
+        watermark_ratio=256/1024,    # 256×256 正方形 (占 25%)
     )
     
-    print(f"Watermark created: {watermark_mask.sum()} pixels marked")
+    print(f"Watermark info (on fc2 layer):")
+    print(f"  Layer: fc2 (1024 → 1024)")
+    print(f"  Symbol: '8'")
+    print(f"  Size: {watermark_info['letter_size']}x{watermark_info['letter_size']} (square)")
+    print(f"  Position: {watermark_info['position']}")
+    print(f"  Region ratio: {watermark_info['region_ratio']*100:.1f}% of fc2 matrix")
+    print(f"  Symbol pixels: {watermark_info['letter_pixels']} ({watermark_info['letter_pixel_ratio']*100:.2f}%)")
     print(f"Learning rates: {lrs}")
     print(f"Optimizers: {optimizer_types}")
     print(f"Training steps: {num_steps}")
@@ -427,18 +440,28 @@ def run_lr_sweep_experiment(
             init_mode="spectral_mup" if use_mup_init else "xavier",
             init_sigma=init_sigma,
         )
-        initial_weight = model.get_hidden_weight().clone()
+        initial_weight = model.get_hidden_weight(layer_idx=2).clone()  # fc2
         apply_watermark(initial_weight, watermark_mask, watermark_value)
         
+        # Save full weight matrix (fc2)
         visualize_weight_matrix(
             initial_weight,
-            title="Initial Weight (with watermark 'a')",
-            save_path=str(save_dir / "initial_weight.png"),
+            title="Initial fc2 Weight (with watermark '8')",
+            save_path=str(save_dir / "initial_weight_fc2.png"),
+        )
+        
+        # Save watermark region only (cropped 256×256 square)
+        visualize_watermark_region(
+            initial_weight,
+            watermark_info,
+            title="Initial Watermark Region (digit '8', 256×256)",
+            save_path=str(save_dir / "initial_watermark_region.png"),
         )
         
         print(f"\nResults saved to {save_dir}")
     
-    return results
+    # Store watermark_info in results for later use
+    return results, watermark_info
 
 
 def print_summary(results: Dict[str, Dict[float, Dict]]):

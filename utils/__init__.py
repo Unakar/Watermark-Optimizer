@@ -1,6 +1,11 @@
-from .watermark import generate_letter_mask, apply_watermark
+from .watermark import generate_letter_mask, apply_watermark, create_watermark_setup, get_watermark_region
 from .data import get_cifar10_dataloader
-from .visualization import visualize_weight_matrix, plot_lr_sweep_results
+from .visualization import (
+    visualize_weight_matrix,
+    plot_lr_sweep_results,
+    visualize_watermark_region,
+    visualize_watermark_comparison,
+)
 from .mup import (
     get_mup_lr_scale_factor,
     spectral_mup_init,
@@ -11,10 +16,14 @@ from .mup import (
 
 __all__ = [
     "generate_letter_mask",
-    "apply_watermark", 
+    "apply_watermark",
+    "create_watermark_setup",
+    "get_watermark_region",
     "get_cifar10_dataloader",
     "visualize_weight_matrix",
     "plot_lr_sweep_results",
+    "visualize_watermark_region",
+    "visualize_watermark_comparison",
     # μP utilities
     "get_mup_lr_scale_factor",
     "spectral_mup_init",

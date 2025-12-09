@@ -147,7 +147,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Run experiments
-    results = run_lr_sweep_experiment(
+    results, watermark_info = run_lr_sweep_experiment(
         optimizer_types=args.optimizers,
         lr_range=(args.lr_min, args.lr_max),
         num_lrs=args.num_lrs,
@@ -164,6 +164,11 @@ def main():
     
     # Print summary
     print_summary(results)
+    
+    # Print watermark info
+    print(f"\nWatermark configuration:")
+    print(f"  Size: {watermark_info['letter_size']}×{watermark_info['letter_size']} (square)")
+    print(f"  Region: {watermark_info['region_ratio']*100:.1f}% of matrix area")
     
     # Save comprehensive results
     save_experiment_summary(results, str(output_dir))

@@ -133,24 +133,32 @@ def compute_watermark_visibility(
 def create_watermark_setup(
     weight_shape: Tuple[int, int] = (1024, 3072),
     letter: str = "a",
-) -> Tuple[np.ndarray, float]:
+    watermark_value: Optional[float] = None,
+    watermark_ratio: float = 0.5,  # 水印边长占矩阵高度的比例
+) -> Tuple[np.ndarray, float, dict]:
     """Create a standard watermark setup for experiments.
     
     Args:
         weight_shape: Shape of the weight matrix
         letter: Letter to use as watermark
+        watermark_value: Value to set for watermark (default: 0)
+        watermark_ratio: 水印正方形边长 = rows * watermark_ratio
         
     Returns:
-        Tuple of (mask, watermark_value)
+        Tuple of (mask, watermark_value, info_dict)
+        info_dict contains: letter_size, position, area_ratio
     """
     rows, cols = weight_shape
     
-    # Scale letter size based on matrix dimensions
-    letter_size = min(rows // 4, cols // 15, 200)
-    font_size = int(letter_size * 0.9)
+    # 水印是正方形，边长 = rows * watermark_ratio
+    letter_size = int(rows * watermark_ratio)
+    letter_size = max(letter_size, 100)  # 至少 100 像素
+    font_size = int(letter_size * 0.85)
     
-    # Position in top-left area
-    position = (rows // 10, cols // 20)
+    # Position: 左上角，留一些边距
+    margin_row = (rows - letter_size) // 4
+    margin_col = (cols - letter_size) // 8
+    position = (margin_row, margin_col)
     
     mask = generate_letter_mask(
         letter=letter,
@@ -160,5 +168,41 @@ def create_watermark_setup(
         font_size=font_size,
     )
     
-    return mask, 0.0  # Value = 0 for the watermark
+    # Default watermark value is 0
+    if watermark_value is None:
+        watermark_value = 0.0
+    
+    # 计算信息
+    total_pixels = rows * cols
+    watermark_region_pixels = letter_size * letter_size
+    letter_pixels = mask.sum()
+    
+    info = {
+        'letter_size': letter_size,
+        'position': position,
+        'region_end': (position[0] + letter_size, position[1] + letter_size),
+        'region_ratio': watermark_region_pixels / total_pixels,  # 水印区域占比
+        'letter_pixel_ratio': letter_pixels / total_pixels,  # 字母像素占比
+        'letter_pixels': int(letter_pixels),
+    }
+    
+    return mask, watermark_value, info
+
+
+def get_watermark_region(
+    weight: np.ndarray,
+    info: dict,
+) -> np.ndarray:
+    """Extract the watermark region from weight matrix.
+    
+    Args:
+        weight: Full weight matrix
+        info: Info dict from create_watermark_setup
+        
+    Returns:
+        Cropped weight matrix containing only the watermark region (square)
+    """
+    r_start, c_start = info['position']
+    r_end, c_end = info['region_end']
+    return weight[r_start:r_end, c_start:c_end]
 
