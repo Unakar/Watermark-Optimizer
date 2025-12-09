@@ -273,7 +273,7 @@ def run_single_experiment(
     # Apply watermark to fc2 (layer 2)
     # 水印植入逻辑：
     # 1. 获取 fc2 权重 (shape: 1024 × 1024)
-    # 2. 在权重矩阵上，把数字 "8" 形状的区域 (256×256) 设为 0
+    # 2. 在权重矩阵上，把数字 "8" 形状的区域 (512×512) 设为 0
     # 3. 训练后观察这些 0 值是否被填充 → 判断权重是否远离初始化
     initial_weight = model.get_hidden_weight(layer_idx=2).clone()
     apply_watermark(initial_weight, watermark_mask, watermark_value)
@@ -366,11 +366,11 @@ def run_lr_sweep_experiment(
     lrs = np.logspace(np.log10(lr_range[0]), np.log10(lr_range[1]), num_lrs)
     
     # Create watermark for fc2 (layer 2)
-    # fc2 shape: (1024, 1024), 水印大小 256×256，数字 "8"
+    # fc2 shape: (1024, 1024), 水印大小 512×512，数字 "8"
     watermark_mask, watermark_value, watermark_info = create_watermark_setup(
         weight_shape=(1024, 1024),  # fc2 的 shape
         letter="8",                  # 数字 8
-        watermark_ratio=256/1024,    # 256×256 正方形 (占 25%)
+        watermark_ratio=512/1024,    # 512×512 正方形 (占 25%)
     )
     
     print(f"Watermark info (on fc2 layer):")
@@ -450,11 +450,11 @@ def run_lr_sweep_experiment(
             save_path=str(save_dir / "initial_weight_fc2.png"),
         )
         
-        # Save watermark region only (cropped 256×256 square)
+        # Save watermark region only (cropped 512×512 square)
         visualize_watermark_region(
             initial_weight,
             watermark_info,
-            title="Initial Watermark Region (digit '8', 256×256)",
+            title="Initial Watermark Region (digit '8', 512×512)",
             save_path=str(save_dir / "initial_watermark_region.png"),
         )
         
