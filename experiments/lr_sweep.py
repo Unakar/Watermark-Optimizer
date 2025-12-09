@@ -9,12 +9,13 @@ from typing import Dict, List, Optional, Tuple
 from tqdm import tqdm
 from pathlib import Path
 import copy
+import matplotlib.pyplot as plt
 
 from models import SimpleMLP
 from optimizers import SpectralBall, MuonBall, Muon
 from utils.watermark import create_watermark_setup, apply_watermark, compute_watermark_visibility, get_watermark_region
 from utils.data import get_cifar10_dataloader
-from utils.visualization import visualize_weight_matrix, visualize_watermark_region, visualize_watermark_comparison
+from utils.visualization import visualize_weight_matrix, visualize_watermark_region, visualize_watermark_comparison, compute_stable_rank
 
 
 def get_mup_lr_scale(d_out: int, d_in: int, mode: str = "spectral_mup") -> float:
@@ -494,4 +495,128 @@ def print_summary(results: Dict[str, Dict[float, Dict]]):
         print(f"Best: LR={best_lr:.6f}, Accuracy={best_acc:.4f}")
     
     print("\n" + "=" * 70)
+
+
+def analyze_stable_rank(
+    widths: List[int] = [32, 64, 128, 256, 512, 1024, 2048],
+    batch_size: int = 512,
+    device: str = "cuda",
+    seed: int = 42,
+    data_root: str = "./data",
+    save_path: Optional[str] = None,
+):
+    """Analyze stable rank of gradients vs dualized gradients at different widths.
+    
+    This replicates the analysis from the weight-erasure.ipynb notebook.
+    
+    理论预测：
+    - 普通梯度的 stable rank 很小（~1-10），与 width 无关
+    - Dualized 梯度 (msign) 的 stable rank = rank，增长到 batch_size 后饱和
+    
+    Args:
+        widths: List of hidden layer widths to test
+        batch_size: Batch size
+        device: Device
+        seed: Random seed
+        data_root: Data directory
+        save_path: Path to save the plot
+        
+    Returns:
+        Dict with stable rank values for gradients and dualized gradients
+    """
+    import matplotlib.pyplot as plt
+    from optimizers.spectral_ball import msign
+    
+    print("=" * 60)
+    print("Stable Rank Analysis")
+    print(f"Batch size: {batch_size}")
+    print(f"Widths: {widths}")
+    print("=" * 60)
+    
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    
+    # Get a batch of data
+    dataloader = get_cifar10_dataloader(
+        root=data_root,
+        batch_size=batch_size,
+        train=True,
+    )
+    inputs, labels = next(iter(dataloader))
+    inputs = inputs.view(inputs.size(0), -1).to(device)  # Flatten: [B, 3072]
+    labels = labels.to(device)
+    
+    stable_rank_grads = []
+    stable_rank_dualized_grads = []
+    
+    for width in widths:
+        print(f"\nWidth: {width}")
+        
+        # Create model
+        model = SimpleMLP(
+            input_dim=3072,
+            hidden_dim=width,
+            hidden_dim2=width,
+            output_dim=10,
+            init_mode="xavier",
+        ).to(device)
+        
+        # Forward pass
+        outputs = model(inputs)
+        loss = nn.CrossEntropyLoss()(outputs, labels)
+        
+        # Backward pass
+        loss.backward()
+        
+        # Get gradient of fc2 (middle layer)
+        grad = model.fc2.weight.grad.clone()
+        
+        # Compute stable rank of raw gradient
+        srank_grad = compute_stable_rank(grad)
+        stable_rank_grads.append(srank_grad)
+        
+        # Compute stable rank of dualized gradient (msign)
+        with torch.no_grad():
+            dualized_grad = msign(grad)
+        srank_dualized = compute_stable_rank(dualized_grad)
+        stable_rank_dualized_grads.append(srank_dualized)
+        
+        print(f"  Raw gradient stable rank: {srank_grad:.2f}")
+        print(f"  Dualized (msign) stable rank: {srank_dualized:.2f}")
+        
+        # Clean up
+        del model
+        torch.cuda.empty_cache() if device == "cuda" else None
+    
+    # Plot results
+    plt.figure(figsize=(10, 6))
+    plt.plot(widths, stable_rank_grads, 'o-', label='Raw Gradients', linewidth=2, markersize=8)
+    plt.plot(widths, stable_rank_dualized_grads, 'o-', label='Dualized Gradients (msign)', linewidth=2, markersize=8)
+    plt.axhline(y=batch_size, color='r', linestyle='--', label=f'Batch size = {batch_size}', alpha=0.7)
+    plt.axvline(x=batch_size, color='r', linestyle='--', alpha=0.7)
+    
+    plt.xscale('log')
+    plt.yscale('log')
+    plt.xlabel('Hidden Layer Width', fontsize=14)
+    plt.ylabel('Stable Rank', fontsize=14)
+    plt.title('Effect of Dualization on Stable Rank of Weight Updates', fontsize=16)
+    plt.legend(frameon=False, fontsize=12)
+    plt.grid(True, alpha=0.3)
+    
+    if save_path:
+        plt.savefig(save_path, dpi=200, bbox_inches='tight')
+        print(f"\nPlot saved to {save_path}")
+    
+    plt.close()
+    
+    print("\n" + "=" * 60)
+    print("Analysis complete!")
+    print("=" * 60)
+    
+    return {
+        'widths': widths,
+        'stable_rank_grads': stable_rank_grads,
+        'stable_rank_dualized_grads': stable_rank_dualized_grads,
+        'batch_size': batch_size,
+    }
 
