@@ -159,21 +159,21 @@ class Muon(Optimizer):
     def _compute_muon_update(self, M: torch.Tensor) -> torch.Tensor:
         """Compute Muon update direction.
 
-        Simply orthogonalizes the momentum using msign.
+        Simply orthogonalizes the momentum using msign (via exact SVD).
         No spectral constraints (no retraction).
 
         Args:
             M: Momentum tensor
 
         Returns:
-            Update direction Φ = msign(M) * scale
+            Update direction Φ = msign(M) * scale = U @ V^T * scale
         """
         # Convert M to fp32 and normalize
         M_fp32 = M.to(torch.float32)
         M_fp32 = M_fp32 / (torch.linalg.norm(M_fp32, dim=(-2, -1), keepdim=True).clamp_min(1e-8))
 
-        # Orthogonalize: Φ = msign(M)
-        Phi = msign(M_fp32, steps=self.msign_steps)
+        # Orthogonalize: Φ = msign(M) = U @ V^T via exact SVD
+        Phi = msign(M_fp32)  # Uses SVD internally
 
         # Apply scale factor
         scale_factor = get_scale_factor(M.shape[0], M.shape[1], mode=self.scale_mode)

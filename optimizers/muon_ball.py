@@ -41,25 +41,25 @@ def compute_muon_ball_update(
     W: torch.Tensor,
     M: torch.Tensor,
     target_radius: float,
-    power_iteration_steps: int,
-    msign_steps: int,
+    power_iteration_steps: int = None,  # Ignored (SVD is exact)
+    msign_steps: int = None,            # Ignored (SVD is exact)
     retract_mode: str = 'hard',
     retract_alpha: float = 0.05,
     current_lr: Optional[float] = None,
 ) -> tuple[torch.Tensor, float, float]:
     """Compute MuonBall update (Spectral Ball with λ=0).
 
-    Algorithm:
-    1. Power iteration to get σ, u, v
+    Algorithm (using exact SVD):
+    1. SVD to get σ, u, v (top singular triplet)
     2. Retract W to spectral sphere: W ← (R/σ)W
-    3. Orthogonalize: Φ = msign(M)  [simplified, no λ]
+    3. Orthogonalize: Φ = msign(M) = U @ V^T  [simplified, no λ]
 
     Args:
         W: Current weight matrix (modified in-place for retraction)
         M: Momentum tensor
         target_radius: Target spectral norm R
-        power_iteration_steps: Number of power iteration steps
-        msign_steps: Number of Newton-Schulz iterations
+        power_iteration_steps: Ignored (SVD is exact)
+        msign_steps: Ignored (SVD is exact)
         retract_mode: Retraction mode ('hard' or 'dynamic')
         retract_alpha: Alpha parameter for dynamic retraction
         current_lr: Current learning rate (for dynamic retraction)
@@ -74,8 +74,8 @@ def compute_muon_ball_update(
     M_fp32 = M.to(torch.float32)
     M_fp32 = M_fp32 / (torch.linalg.norm(M_fp32, dim=(-2, -1), keepdim=True).clamp_min(1e-8))
 
-    # 1. Power iteration (returns fp32)
-    sigma, u, v = power_iteration(W, steps=power_iteration_steps)
+    # 1. Exact SVD to get σ, u, v
+    sigma, u, v = power_iteration(W)  # Uses SVD internally
     sigma_value = sigma.item()
 
     # 2. Retract W to spectral sphere
@@ -94,9 +94,9 @@ def compute_muon_ball_update(
     else:
         raise ValueError(f"Unknown retract_mode: {retract_mode}")
 
-    # 3. MuonBall: Simply msign(M) without λ solver
+    # 3. MuonBall: msign(M) via exact SVD without λ solver
     # This is the KEY simplification: λ = 0
-    Phi = msign(M_fp32, steps=msign_steps)
+    Phi = msign(M_fp32)  # Uses SVD internally: U @ V^T
 
     return Phi, retract_bias, sigma_value
 

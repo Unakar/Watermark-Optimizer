@@ -2,11 +2,13 @@
 
 This is a standalone version without TP/QKV split complexity.
 Core algorithm:
-1. Power iteration to get σ, u, v
+1. SVD to get σ, u, v (top singular value and vectors)
 2. Retract W to spectral sphere: W ← (R/σ)W
 3. Form Θ = uv^T
 4. Solve for λ: <Θ, msign(M + λΘ)> = 0
 5. Update: W ← W - lr * msign(M + λΘ)
+
+NOTE: This version uses exact SVD for best precision (instead of Newton-Schulz/power iteration).
 """
 
 import math
@@ -17,71 +19,74 @@ from torch.optim.optimizer import Optimizer
 
 
 # ============================================================================
-# Core utility functions
+# Core utility functions (SVD-based for exact computation)
 # ============================================================================
 
-def _newton_schulz_step(X: torch.Tensor, a: float, b: float, c: float) -> torch.Tensor:
-    """One Newton-Schulz iteration: X ← a·X + X·(b·A + c·A²) where A = X·X^T."""
-    A = X @ X.mT
-    B = torch.addmm(A, A, A, alpha=c, beta=b)
-    X = torch.addmm(X, B, X, alpha=1.0, beta=a)
-    return X
-
-
-@torch.compile
-def msign(G: torch.Tensor, steps: int) -> torch.Tensor:
-    """Matrix sign via Newton-Schulz with Polar-Express coefficients."""
+@torch.no_grad()
+def msign(G: torch.Tensor, steps: int = None) -> torch.Tensor:
+    """Matrix sign function via exact SVD: msign(G) = U @ V^T.
+    
+    For a matrix G with SVD: G = U @ S @ V^T,
+    the matrix sign is: msign(G) = U @ V^T
+    
+    This gives the orthogonal matrix closest to G in Frobenius norm.
+    
+    Args:
+        G: Input matrix (m x n)
+        steps: Ignored (kept for API compatibility, SVD is exact)
+    
+    Returns:
+        Matrix sign U @ V^T with same shape as G
+    """
     if G.ndim < 2:
         raise ValueError("Input tensor must have at least 2 dimensions.")
     
     orig_dtype = G.dtype
-    if G.dtype != torch.float32:
-        G = G.to(torch.float32)
+    G_fp32 = G.to(torch.float32) if G.dtype != torch.float32 else G
     
-    transpose = G.size(-2) > G.size(-1)
-    X = G.mT if transpose else G
-    X = torch.nn.functional.normalize(X, p=2, dim=(-2, -1), eps=1e-7)
-    X = X.to(torch.bfloat16)
+    # Full SVD: G = U @ diag(S) @ V^T
+    U, S, Vh = torch.linalg.svd(G_fp32, full_matrices=False)
     
-    # Polar-Express coefficients for fast convergence
-    coeffs = [
-        (8.2051, -22.9019, 16.4607),
-        (4.0664, -2.8612, 0.5184),
-        (3.9096, -2.8234, 0.5250),
-        (3.2856, -2.4153, 0.4853),
-        (2.2779, -1.6198, 0.3985),
-        (1.8726, -1.2307, 0.3585),
-        (1.8564, -1.2132, 0.3568),
-        (1.8750, -1.2500, 0.3750),
-    ]
+    # msign(G) = U @ V^T
+    result = U @ Vh
     
-    for i in range(steps):
-        if i < 8:
-            a, b, c = coeffs[i]
-        else:
-            a, b, c = coeffs[-1]
-        X = _newton_schulz_step(X, a, b, c)
-    
-    result = X.mT if transpose else X
     return result.to(orig_dtype)
 
 
 @torch.no_grad()
-def power_iteration(w: torch.Tensor, steps: int = 10, eps: float = 1e-20) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Leading singular triplet (σ, u, v) via bilateral power iteration."""
+def power_iteration(w: torch.Tensor, steps: int = None, eps: float = 1e-20) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Leading singular triplet (σ, u, v) via exact SVD.
+    
+    Args:
+        w: Input matrix (m x n)
+        steps: Ignored (kept for API compatibility, SVD is exact)
+        eps: Ignored
+    
+    Returns:
+        Tuple (sigma, u, v) where:
+        - sigma: Top singular value (scalar tensor)
+        - u: Left singular vector (m x 1)
+        - v: Right singular vector (n x 1)
+    """
     if w.ndim < 2:
         raise ValueError("Input tensor must have at least 2 dimensions.")
     
-    w = w.to(torch.float32)
-    v = torch.randn_like(w[..., :1, :].transpose(-2, -1))
-    v = torch.nn.functional.normalize(v, dim=-2)
+    w_fp32 = w.to(torch.float32) if w.dtype != torch.float32 else w
     
-    for _ in range(steps):
-        v = torch.nn.functional.normalize(w.transpose(-2, -1) @ (w @ v), dim=-2)
-    u = torch.nn.functional.normalize(w @ v, dim=-2)
-    s = (u.transpose(-2, -1) @ w @ v).squeeze(-1).squeeze(-1)
+    # Full SVD
+    U, S, Vh = torch.linalg.svd(w_fp32, full_matrices=False)
     
-    return s, u, v
+    # Top singular value
+    sigma = S[..., 0]
+    
+    # Top left singular vector (m x 1)
+    u = U[..., :1]
+    
+    # Top right singular vector (n x 1)
+    # Vh is V^T, so we need V[:, 0] = Vh[0, :].T
+    v = Vh[..., :1, :].transpose(-2, -1)
+    
+    return sigma, u, v
 
 
 @torch.no_grad()
@@ -91,10 +96,17 @@ def inner_product(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 
 
 @torch.no_grad()
-def compute_f(G: torch.Tensor, Theta: torch.Tensor, lambda_value: float, msign_steps: int = 5) -> float:
-    """f(λ) = <Θ, msign(G + λΘ)>."""
+def compute_f(G: torch.Tensor, Theta: torch.Tensor, lambda_value: float, msign_steps: int = None) -> float:
+    """f(λ) = <Θ, msign(G + λΘ)>.
+    
+    Args:
+        G: Gradient/momentum matrix
+        Theta: u @ v^T (rank-1 matrix from top singular vectors)
+        lambda_value: Lagrange multiplier
+        msign_steps: Ignored (SVD is exact)
+    """
     z = G + lambda_value * Theta
-    Phi = msign(z, steps=msign_steps)
+    Phi = msign(z)
     f_value = float(inner_product(Theta, Phi).item())
     return f_value
 
@@ -106,13 +118,13 @@ def find_bracket(
     initial_guess: float = 0.0,
     initial_step: float = 1e-3,
     max_expansions: int = 10,
-    msign_steps: int = 5,
+    msign_steps: int = None,  # Ignored (SVD is exact)
     tolerance_f: float = 1e-8,
 ) -> Tuple[Optional[float], Optional[float], float, float]:
     """Find λ_L < λ_R such that f(λ_L) <= 0 <= f(λ_R)."""
     
     λ0 = initial_guess
-    f0 = compute_f(G, Theta, λ0, msign_steps)
+    f0 = compute_f(G, Theta, λ0)
     
     if abs(f0) < tolerance_f:
         return λ0, λ0, f0, f0
@@ -122,7 +134,7 @@ def find_bracket(
     
     for _ in range(max_expansions):
         λ_new = λ_prev + step
-        f_new = compute_f(G, Theta, λ_new, msign_steps)
+        f_new = compute_f(G, Theta, λ_new)
         
         sign_prev = f_prev <= 0.0
         sign_new = f_new <= 0.0
@@ -150,7 +162,7 @@ def solve_lambda_bisection(
     Theta: torch.Tensor,
     tolerance_f: float = 1e-6,
     max_iterations: int = 20,
-    msign_steps: int = 5,
+    msign_steps: int = None,  # Ignored (SVD is exact)
 ) -> float:
     """Solve λ such that f(λ) = <Θ, msign(G + λΘ)> = 0 using bisection."""
     
@@ -159,7 +171,6 @@ def solve_lambda_bisection(
         initial_guess=0.0,
         initial_step=1e-3,
         max_expansions=10,
-        msign_steps=msign_steps,
         tolerance_f=tolerance_f,
     )
     
@@ -174,7 +185,7 @@ def solve_lambda_bisection(
     
     for _ in range(max_iterations):
         λ_mid = 0.5 * (λ_L + λ_R)
-        f_mid = compute_f(G, Theta, λ_mid, msign_steps)
+        f_mid = compute_f(G, Theta, λ_mid)
         
         if abs(f_mid) < abs(best_f):
             best_λ, best_f = λ_mid, f_mid
@@ -347,6 +358,10 @@ class SpectralBall(Optimizer):
     ) -> torch.Tensor:
         """Compute spectral ball constrained update direction.
         
+        Uses exact SVD for best precision:
+        - power_iteration → SVD for exact (σ, u, v)
+        - msign → SVD for exact U @ V^T
+        
         Args:
             W: Weight matrix (modified in-place for retraction)
             M: Momentum tensor
@@ -359,8 +374,8 @@ class SpectralBall(Optimizer):
         M_fp32 = M.to(torch.float32)
         M_fp32 = M_fp32 / (torch.linalg.norm(M_fp32, dim=(-2, -1), keepdim=True).clamp_min(1e-8))
         
-        # 1. Power iteration to get σ, u, v
-        sigma, u, v = power_iteration(W, steps=self.power_iteration_steps)
+        # 1. Exact SVD to get σ, u, v (top singular triplet)
+        sigma, u, v = power_iteration(W)  # Now uses SVD internally
         sigma_value = sigma.item()
         
         # 2. Retract W to spectral sphere: W ← (R/σ)W
@@ -378,12 +393,11 @@ class SpectralBall(Optimizer):
             Theta=Theta,
             tolerance_f=1e-8,
             max_iterations=100,
-            msign_steps=self.msign_steps,
         )
         
-        # 5. Compute Φ = msign(M + λΘ)
+        # 5. Compute Φ = msign(M + λΘ) via exact SVD
         Z = M_fp32 + lambda_value * Theta
-        Phi = msign(Z, steps=self.msign_steps)
+        Phi = msign(Z)  # Now uses SVD internally
         
         # Apply scale factor
         scale_factor = get_scale_factor(W.shape[0], W.shape[1], mode=self.scale_mode)
