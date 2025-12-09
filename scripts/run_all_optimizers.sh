@@ -8,14 +8,16 @@
 cd "$(dirname "$0")/.."
 
 python3 run_experiment.py \
-    --lr-min 0.1 \
-    --lr-max 10.0 \
-    --num-lrs 10 \
-    --num-steps 1000 \
-    --batch-size 128 \
-    --optimizers adamw muon muon_ball spectral_ball \
+    --lr-min 3e-2 \
+    --lr-max 1.3 \
+    --num-lrs 4 \
+    --num-steps 500 \
+    --batch-size 1024 \
+    --optimizers muon_ball adamw \
     --output-dir ./results/all_optimizers \
-    --no-plot
+    --use-mup-init \
+    --use-mup-lr \
+    --init-sigma 0.02 \
 
 echo ""
 echo "Experiment complete! Results saved to ./results/all_optimizers"
