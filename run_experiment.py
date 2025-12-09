@@ -180,6 +180,7 @@ def main():
                 results,
                 save_path=str(output_dir / "lr_sweep_results.png"),
                 show=False,
+                watermark_info=watermark_info,  # 传递水印信息，只显示水印区域
             )
             print(f"\nMain figure saved to: {output_dir / 'lr_sweep_results.png'}")
         except Exception as e:

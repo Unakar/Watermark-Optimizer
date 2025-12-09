@@ -204,21 +204,24 @@ def visualize_weight_matrix(
 
 def create_weight_thumbnail(
     weight: torch.Tensor,
-    size: Tuple[int, int] = (120, 40),  # Larger thumbnails for better visibility
-    use_diverging: bool = True,  # Use diverging colormap to show watermark
+    size: Tuple[int, int] = (150, 150),  # Square for watermark region
+    watermark_info: Optional[dict] = None,  # 如果提供，只裁剪水印区域
+    highlight_watermark: bool = True,  # 水印（0值）显示为黑色
 ) -> np.ndarray:
-    """Create a thumbnail of the weight matrix with watermark visibility.
+    """Create a thumbnail of the weight matrix (or watermark region only).
     
     Args:
         weight: Weight tensor
         size: Target thumbnail size (width, height)
-        use_diverging: If True, use diverging colormap centered at 0
+        watermark_info: 如果提供，只裁剪 512×512 水印区域
+        highlight_watermark: 如果 True，水印（值接近 0）显示为黑色
         
     Returns:
         Thumbnail as RGB numpy array
     """
     from PIL import Image
     import matplotlib.cm as cm
+    from matplotlib.colors import LinearSegmentedColormap
     
     # Convert to numpy
     if isinstance(weight, torch.Tensor):
@@ -226,18 +229,43 @@ def create_weight_thumbnail(
     else:
         w = weight.copy()
     
-    if use_diverging:
-        # Center at 0 to show watermark (which is 0) as white/neutral
+    # 如果提供了 watermark_info，只裁剪水印区域
+    if watermark_info is not None:
+        r_start, c_start = watermark_info['position']
+        r_end, c_end = watermark_info['region_end']
+        w = w[r_start:r_end, c_start:c_end]
+    
+    if highlight_watermark:
+        # 使用自定义 colormap：
+        # - 0 附近（水印）→ 黑色
+        # - 负值 → 蓝色
+        # - 正值 → 红色
         abs_max = max(abs(w.min()), abs(w.max()))
-        if abs_max > 1e-8:
-            w_normalized = (w + abs_max) / (2 * abs_max)  # Map to [0, 1] with 0 at 0.5
-        else:
-            w_normalized = np.full_like(w, 0.5)
+        if abs_max < 1e-8:
+            abs_max = 1.0
         
-        # Apply RdBu colormap
+        # 判断哪些是水印像素（接近 0）
+        watermark_threshold = abs_max * 0.05  # 5% 阈值
+        is_watermark = np.abs(w) < watermark_threshold
+        
+        # 标准化到 [-1, 1]
+        w_normalized = w / abs_max
+        
+        # 创建 RGB 图像
+        rgb = np.zeros((*w.shape, 3), dtype=np.float32)
+        
+        # 非水印区域：蓝-白-红 colormap
+        # 负值 → 蓝色，正值 → 红色
         cmap = cm.get_cmap('RdBu_r')
-        w_colored = cmap(w_normalized)[:, :, :3]  # RGB only
-        w_uint8 = (w_colored * 255).astype(np.uint8)
+        non_watermark_normalized = (w_normalized + 1) / 2  # Map to [0, 1]
+        colored = cmap(non_watermark_normalized)[:, :, :3]
+        
+        rgb = colored.copy()
+        
+        # 水印区域：黑色（加粗效果）
+        rgb[is_watermark] = [0, 0, 0]  # 纯黑色
+        
+        w_uint8 = (rgb * 255).astype(np.uint8)
     else:
         # Simple grayscale normalization
         w_min, w_max = w.min(), w.max()
@@ -248,7 +276,7 @@ def create_weight_thumbnail(
         w_uint8 = (w_normalized * 255).astype(np.uint8)
     
     # Resize using PIL
-    if use_diverging:
+    if highlight_watermark:
         img = Image.fromarray(w_uint8, mode='RGB')
     else:
         img = Image.fromarray(w_uint8, mode='L')
@@ -261,7 +289,8 @@ def plot_lr_sweep_results(
     results: Dict[str, Dict[float, Dict]],
     save_path: Optional[str] = None,
     show: bool = True,
-    figsize: Tuple[int, int] = (16, 10),  # Larger figure for thumbnails
+    figsize: Tuple[int, int] = (20, 12),  # 更大的图
+    watermark_info: Optional[dict] = None,  # 水印信息，用于裁剪
 ):
     """Plot learning rate sweep results with weight matrix thumbnails.
     
@@ -270,6 +299,7 @@ def plot_lr_sweep_results(
         save_path: Path to save the figure
         show: Whether to display the plot
         figsize: Figure size
+        watermark_info: 水印信息，如果提供则只显示水印区域
     """
     fig, ax = plt.subplots(figsize=figsize)
     
@@ -296,29 +326,30 @@ def plot_lr_sweep_results(
         # Plot the accuracy curve
         ax.plot(lrs, accuracies, 'o-', color=color, label=label, linewidth=2, markersize=8)
         
-        # Add weight matrix thumbnails
+        # Add weight matrix thumbnails (只显示水印区域，水印为黑色)
         for i, lr in enumerate(lrs):
             if 'weight_image' in lr_results[lr] and lr_results[lr]['weight_image'] is not None:
                 weight_img = lr_results[lr]['weight_image']
                 
-                # Create larger thumbnail for better visibility
+                # 创建缩略图：只裁剪水印区域，水印显示为黑色
                 thumbnail = create_weight_thumbnail(
                     torch.from_numpy(weight_img) if isinstance(weight_img, np.ndarray) else weight_img,
-                    size=(100, 35),  # Larger size for watermark visibility
-                    use_diverging=True,  # Use colormap to show watermark
+                    size=(120, 120),  # 正方形，更大
+                    watermark_info=watermark_info,  # 只裁剪水印区域
+                    highlight_watermark=True,  # 水印显示为黑色
                 )
                 
                 # Calculate offset for thumbnail placement (spread out based on optimizer index)
                 opt_idx = list(results.keys()).index(optimizer_name)
-                y_offset = 0.12 * (opt_idx - len(results) / 2 + 0.5)
+                y_offset = 0.18 * (opt_idx - len(results) / 2 + 0.5)
                 
                 # For RGB thumbnail, don't use cmap
-                imagebox = OffsetImage(thumbnail, zoom=0.6)
+                imagebox = OffsetImage(thumbnail, zoom=0.8)  # 更大的 zoom
                 ab = AnnotationBbox(
                     imagebox,
                     (lr, accuracies[i] + y_offset),
                     frameon=True,
-                    pad=0.1,
+                    pad=0.15,
                     bboxprops=dict(edgecolor=color, linewidth=2)
                 )
                 ax.add_artist(ab)
@@ -326,10 +357,10 @@ def plot_lr_sweep_results(
     ax.set_xscale('log')
     ax.set_xlabel('Learning Rate', fontsize=14)
     ax.set_ylabel('Training Accuracy', fontsize=14)
-    ax.set_title('Learning Rate Sweep: Watermark Erasure Experiment\n(Thumbnails show weight matrices - watermark "a" should be visible as white region)', fontsize=14)
+    ax.set_title('Learning Rate Sweep: Watermark Erasure Experiment\n(Thumbnails show 512×512 watermark region only - digit "8" shown in BLACK)', fontsize=14)
     ax.legend(loc='upper left', fontsize=11)
     ax.grid(True, alpha=0.3)
-    ax.set_ylim(-0.15, 1.25)  # More room for thumbnails
+    ax.set_ylim(-0.25, 1.35)  # More room for larger thumbnails
     
     plt.tight_layout()
     
